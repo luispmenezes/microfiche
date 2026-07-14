@@ -550,6 +550,8 @@ func main() {
 		"refuse to ingest files above this many characters (grep+slice instead)")
 	statsFlag := flag.Bool("stats", false,
 		"print savings statistics from ~/.microfiche/log.jsonl and exit")
+	resetStatsFlag := flag.Bool("reset-stats", false,
+		"clear the telemetry log (prints a final summary first) and exit")
 	flag.Parse()
 	if *profile == "opus" {
 		fontSize = 10
@@ -561,6 +563,15 @@ func main() {
 		log.Fatal(fontError)
 	}
 
+	if *resetStatsFlag {
+		printStats()
+		logPath := filepath.Join(homeDir(), ".microfiche", "log.jsonl")
+		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+			log.Fatal(err)
+		}
+		fmt.Println("stats reset.")
+		return
+	}
 	if *statsFlag {
 		printStats()
 		return

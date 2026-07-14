@@ -37,8 +37,9 @@ one tool, `microfiche(file_path, page)`, that does exactly that split.
   refused with Grep-then-`line_start`/`line_end` guidance — both
   boundaries are where the benchmarks say imaging stops paying.
 - Renders are cached on (path, mtime, page); every call is logged to
-  `~/.microfiche/log.jsonl` — run `microfiche -stats` to see imaged vs
-  bailed vs skipped calls and estimated tokens/dollars saved.
+  `~/.microfiche/log.jsonl` — `microfiche -stats` shows imaged vs
+  bailed vs skipped calls and estimated tokens/dollars saved;
+  `-reset-stats` clears the log.
 
 ## Benchmarks
 

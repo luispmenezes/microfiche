@@ -58,6 +58,7 @@ var fontPaths = []string{
 	"/System/Library/Fonts/Menlo.ttc",
 	"/System/Library/Fonts/Monaco.ttf",
 	"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+	"C:\\Windows\\Fonts\\consola.ttf",
 }
 
 var lineColors = []color.RGBA{

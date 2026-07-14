@@ -59,13 +59,21 @@ Reproduce on your own files and model:
 
 ## Setup
 
-Requires Go 1.22+ to build and a monospace system font (Menlo/Monaco on
-macOS, DejaVu Sans Mono on Linux).
+Grab a prebuilt binary from
+[Releases](https://github.com/luispmenezes/microfiche/releases)
+(macOS arm64/amd64, Linux amd64/arm64, Windows amd64), or:
 
 ```sh
-go build -o microfiche .
-claude mcp add microfiche -- "$(pwd)/microfiche"                 # Fable 5
-claude mcp add microfiche -- "$(pwd)/microfiche" -profile opus   # Opus 4.x
+go install github.com/luispmenezes/microfiche@latest
+```
+
+Then register it with Claude Code (single static binary, no runtime deps;
+needs a monospace system font — Menlo/Monaco on macOS, DejaVu Sans Mono
+on Linux, Consolas on Windows):
+
+```sh
+claude mcp add microfiche -- /path/to/microfiche                 # Fable 5
+claude mcp add microfiche -- /path/to/microfiche -profile opus   # Opus 4.x
 ```
 
 That's it — Claude Code picks the tool up automatically. To preview what

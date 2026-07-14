@@ -1,15 +1,19 @@
 # microfiche
 
 Cut Claude Code token costs by serving large read-only files as rendered
-images instead of text. Named after the original optical-compression
-medium.
+images instead of text.
 
-An [MCP](https://modelcontextprotocol.io) server exposing one tool,
-`microfiche(file_path, page)`. When Claude needs a big reference file —
-docs, logs, transcripts, source it won't edit — the tool returns a dense
-PNG render of the content instead of text. Claude's image tokens are
-priced by pixels (~750 px²/token), so packed text costs 2–3x fewer input
-tokens than the same characters as text tokens.
+The rationale: not everything in a model's context deserves text-token
+prices. What an agent reads splits into a working set (files it edits,
+values it must copy byte-for-byte — this must stay text) and bulk
+reference material it only needs to *understand* — docs, logs,
+transcripts, source it won't touch. Claude prices image tokens by pixels
+(~750 px²/token), so that second kind can travel as a dense PNG render
+at 2–3x fewer input tokens, while the exact-value parts ride along as
+plain text.
+
+microfiche is an [MCP](https://modelcontextprotocol.io) server exposing
+one tool, `microfiche(file_path, page)`, that does exactly that split.
 
 ## How it works
 
@@ -69,27 +73,33 @@ Reproduce on your own files and model:
 
 ## Setup
 
-Grab a prebuilt binary from
-[Releases](https://github.com/luispmenezes/microfiche/releases)
-(macOS arm64/amd64, Linux amd64/arm64, Windows amd64), or:
+One command — downloads the right binary and registers it with Claude
+Code, Codex, and Cursor (whichever are installed):
 
 ```sh
-go install github.com/luispmenezes/microfiche@latest
+curl -fsSL https://raw.githubusercontent.com/luispmenezes/microfiche/main/install.sh | sh
 ```
 
-Single static binary, no runtime deps; needs a monospace system font
-(Menlo/Monaco on macOS, DejaVu Sans Mono on Linux, Consolas on Windows).
+Running an Opus model? `MICROFICHE_PROFILE=opus curl -fsSL ... | sh`.
+macOS and Linux; on Windows grab the `.exe` from
+[Releases](https://github.com/luispmenezes/microfiche/releases) and
+register manually (below).
 
-### Claude Code
+<details>
+<summary>Manual setup</summary>
+
+Download from [Releases](https://github.com/luispmenezes/microfiche/releases)
+or `go install github.com/luispmenezes/microfiche@latest`. Single static
+binary; needs a monospace system font (Menlo/Monaco on macOS, DejaVu
+Sans Mono on Linux, Consolas on Windows).
+
+**Claude Code**
 
 ```sh
-claude mcp add --scope user microfiche -- /path/to/microfiche                 # Fable 5
-claude mcp add --scope user microfiche -- /path/to/microfiche -profile opus  # Opus 4.x
+claude mcp add --scope user microfiche -- /path/to/microfiche [-profile opus]
 ```
 
-### Codex CLI
-
-Add to `~/.codex/config.toml`:
+**Codex CLI** — `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.microfiche]
@@ -97,9 +107,7 @@ command = "/path/to/microfiche"
 args = ["-profile", "opus"]
 ```
 
-### Cursor
-
-Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` per project):
+**Cursor** — `~/.cursor/mcp.json` (or `.cursor/mcp.json` per project):
 
 ```json
 {
@@ -111,6 +119,8 @@ Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` per project):
   }
 }
 ```
+
+</details>
 
 Pick the profile for the model you run: `fable` for Claude Fable 5,
 `opus` for Claude Opus 4.x. On non-Claude models (GPT, Gemini) the

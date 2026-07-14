@@ -34,20 +34,31 @@ tokens than the same characters as text tokens.
 ## Benchmarks
 
 Measured through headless Claude Code (`claude -p`), baseline `Read` vs
-microfiche, same file and question, answers verified equivalent:
+microfiche, same file and question, answers verified equivalent.
 
-| model / profile | file | input tokens | net cost | wall time |
-|---|---|---|---|---|
-| Fable 5 / fable | 58 KB doc | −57 to −62% | **−37 to −53%** | +12 to +52% |
-| Opus 4.6 / opus | 58 KB doc | −37% | **−29%** | ±0% |
-| any / any | ~18 KB doc | ~flat | +10 to +60% (loses) | +50 to 175% |
+Savings and latency by file size (Claude Fable 5, fable profile, mean of
+2 runs per size):
 
-Small files lose: prompt caching already makes cached re-reads nearly
-free, and the extra tool round-trip plus image reasoning cost more than
-the saving — hence the auto-bail. Exact-string recall stayed 100% in all
-benchmark cells *with the matching profile*; running the dense fable
-profile on Opus drops exact recall to ~33% (silent misreads). Match the
-profile to your model.
+| file size | input tokens | net cost | wall time |
+|---|---|---|---|
+| ≤ ~18 KB | auto-bails to plain text | ±0% | ±0% |
+| 20 KB | −41% | **−31%** | +9% |
+| 40 KB | −56% | **−49%** | **−15% (faster)** |
+| 60 KB | −66% | **−58%** | **−16% (faster)** |
+| 120 KB (2 pages) | +16% | +18% (loses) | +40% |
+
+The sweet spot is single-page files (~20–60 KB): cost falls with size,
+and from ~40 KB microfiche is also *faster* than Read — vision-encoding
+one image beats prefilling tens of thousands of text tokens. Small files
+lose (prompt caching makes cached re-reads nearly free, and the tool
+round-trip costs more than it saves — hence the auto-bail); multi-page
+files (> ~60 KB) currently lose too, since each page is a separate
+round-trip.
+
+Model profiles: Opus 4.6 with `-profile opus` on a 58 KB doc measured
+−29% cost at ±0% time. Exact-string recall stayed 100% in every cell
+*with the matching profile*; the dense fable profile on Opus drops exact
+recall to ~33% (silent misreads). Match the profile to your model.
 
 Reproduce on your own files and model:
 
@@ -121,7 +132,7 @@ To preview what the model sees:
 
 ## When to use it
 
-Latency-tolerant sessions over big files: batch/background agents,
-overnight runs, doc- and log-heavy work. It is ~1.1–1.5x slower per read
-and never faster — the win is cost, not speed. Don't point it at files
-you're editing; it refuses small files by design.
+Doc-, log-, and transcript-heavy work over files in the 20–60 KB sweet
+spot, where it is both cheaper and (above ~40 KB) faster than a plain
+Read. On smaller files it bails to text by design; don't point it at
+files you're editing or anything needing byte-exact recall.

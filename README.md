@@ -29,11 +29,16 @@ one tool, `microfiche(file_path, page)`, that does exactly that split.
   crop/zoom the image (agentic zooming burns more output tokens than the
   input saving), and to fall back to the regular `Read` tool for anything
   illegible or byte-exact.
-- **Auto-bail**: files under ~5k estimated tokens, or that wouldn't
-  compress at least 1.25x, return plain text — below that break-even the
-  fixed harness overhead eats the saving.
-- Renders are cached on (path, mtime, page); per-call telemetry is
-  appended to `~/.microfiche/log.jsonl`.
+- **Multi-page in one response**: big files come back as up to 4 dense
+  page images in a single tool result (within a ~25k image-token
+  budget), so a 120 KB file is one round-trip.
+- **Knows when not to fire**: files under ~5k estimated tokens (or that
+  wouldn't compress ≥1.25x) return plain text; files over ~200 KB are
+  refused with Grep-then-`line_start`/`line_end` guidance — both
+  boundaries are where the benchmarks say imaging stops paying.
+- Renders are cached on (path, mtime, page); every call is logged to
+  `~/.microfiche/log.jsonl` — run `microfiche -stats` to see imaged vs
+  bailed vs skipped calls and estimated tokens/dollars saved.
 
 ## Benchmarks
 
@@ -46,18 +51,19 @@ Savings and latency by file size (Claude Fable 5, fable profile, mean of
 | file size | input tokens | net cost | wall time |
 |---|---|---|---|
 | ≤ ~18 KB | auto-bails to plain text | ±0% | ±0% |
-| 20 KB | −41% | **−31%** | +9% |
-| 40 KB | −56% | **−49%** | **−15% (faster)** |
-| 60 KB | −66% | **−58%** | **−16% (faster)** |
-| 120 KB (2 pages) | +16% | +18% (loses) | +40% |
+| 20 KB | −43% | **−36%** | **−10% (faster)** |
+| 40 KB | −55% | **−49%** | **−19% (faster)** |
+| 60 KB | −63% | **−55%** | **−28% (faster)** |
+| 120 KB | −37% | **−33%** | −4% |
+| ≥ ~200 KB | refused — Grep + line range instead | — | — |
 
-The sweet spot is single-page files (~20–60 KB): cost falls with size,
-and from ~40 KB microfiche is also *faster* than Read — vision-encoding
-one image beats prefilling tens of thousands of text tokens. Small files
-lose (prompt caching makes cached re-reads nearly free, and the tool
-round-trip costs more than it saves — hence the auto-bail); multi-page
-files (> ~60 KB) currently lose too, since each page is a separate
-round-trip.
+Cheaper *and* faster across the whole 20–120 KB range: vision-encoding a
+couple of dense images beats prefilling tens of thousands of text
+tokens. The edges are handled by design: small files bail to plain text
+(prompt caching already makes cached re-reads nearly free), and very
+large files are refused with guidance to Grep for the region and re-call
+with `line_start`/`line_end` — at that size full-file ingestion merely
+breaks even and targeted reading wins.
 
 Model profiles: Opus 4.6 with `-profile opus` on a 58 KB doc measured
 −29% cost at ±0% time. Exact-string recall stayed 100% in every cell

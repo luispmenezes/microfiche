@@ -31,21 +31,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-pdf/fpdf"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
+var (
+	maxPages     = 4
+	pageChars    = 95_000
+	pdfMode      = false
+	tokenBudget  = 25_000
+	maxFileChars = 200_000
+)
+
 const (
-	lineSpacing     = 2
-	maxCharsPerPage = 60_000
-	charsPerToken   = 3.5
-	pxPerToken      = 750 // Claude: image tokens ≈ w*h/750
-	maxEdge         = 2400
-	minTextTokens   = 5000 // measured break-even inside Claude Code
-	minRatio        = 1.25
-	factsheetLimit  = 25
+	lineSpacing    = 2
+	charsPerToken  = 3.5
+	pxPerToken     = 750 // Claude: image tokens ≈ w*h/750
+	maxEdge        = 2400
+	minTextTokens  = 5000 // measured break-even inside Claude Code
+	minRatio       = 1.25
+	factsheetLimit = 25
 )
 
 // fontSize is set by -profile: "fable" = 8 (~48 px²/char, needs
@@ -305,8 +313,10 @@ func homeDir() string {
 // ----------------------------------------------------------------- tool ---
 
 type microficheInput struct {
-	FilePath string `json:"file_path" jsonschema:"absolute path of the file to read"`
-	Page     int    `json:"page,omitempty" jsonschema:"1-based page number for files above ~60k characters"`
+	FilePath  string `json:"file_path" jsonschema:"absolute path of the file to read"`
+	Page      int    `json:"page,omitempty" jsonschema:"1-based page number for files above ~60k characters"`
+	LineStart int    `json:"line_start,omitempty" jsonschema:"optional 1-based first line — read only a slice of the file (use after locating a region with Grep)"`
+	LineEnd   int    `json:"line_end,omitempty" jsonschema:"optional 1-based last line of the slice"`
 }
 
 type cacheKey struct {
@@ -352,58 +362,123 @@ func microfiche(ctx context.Context, req *mcp.CallToolRequest,
 		return textResult(fmt.Sprintf("microfiche: %v", err)), nil, nil
 	}
 	text := string(data)
-	nPages := max((len(text)+maxCharsPerPage-1)/maxCharsPerPage, 1)
+	slice := ""
+	if in.LineStart > 0 || in.LineEnd > 0 {
+		lines := strings.Split(text, "\n")
+		lo := max(in.LineStart, 1)
+		hi := len(lines)
+		if in.LineEnd > 0 {
+			hi = min(in.LineEnd, hi)
+		}
+		if lo > hi {
+			return textResult(fmt.Sprintf(
+				"microfiche: empty line range %d-%d (file has %d lines)",
+				in.LineStart, in.LineEnd, len(lines))), nil, nil
+		}
+		text = strings.Join(lines[lo-1:hi], "\n")
+		slice = fmt.Sprintf(" [lines %d-%d]", lo, hi)
+	}
+	if len(text) > maxFileChars && slice == "" {
+		logCall(map[string]any{"file": p, "skipped": true,
+			"reason": "too_large", "chars": len(text)})
+		return textResult(fmt.Sprintf(
+			"microfiche: %s is too large to ingest efficiently (%d chars; "+
+				"full-file imaging degrades past ~200KB). Locate what you "+
+				"need with Grep, then call microfiche again with "+
+				"line_start/line_end for that region — or Read a targeted "+
+				"slice.", p, len(text))), nil, nil
+	}
+	nPages := max((len(text)+pageChars-1)/pageChars, 1)
 	page = min(page, nPages)
-	start := (page - 1) * maxCharsPerPage
-	chunk := text[start:min(start+maxCharsPerPage, len(text))]
-
-	exact := extractExactTokens(chunk)
+	last := min(page+maxPages-1, nPages)
+	// token budget: stop adding pages once the estimated image cost of the
+	// response would exceed it (one page is always returned)
+	var chunks []string
+	estSoFar := 0
+	for pg := page; pg <= last; pg++ {
+		c := text[(pg-1)*pageChars : min(pg*pageChars, len(text))]
+		pageTok := int(float64(len(c)) / charsPerToken / 2.5)
+		if len(chunks) > 0 && estSoFar+pageTok > tokenBudget {
+			last = pg - 1
+			break
+		}
+		estSoFar += pageTok
+		chunks = append(chunks, c)
+	}
+	combined := strings.Join(chunks, "")
+	exact := extractExactTokens(combined)
 	emphasize := make([]string, len(exact))
 	for i, t := range exact {
 		emphasize[i] = t.tok
 	}
-	img := render(chunk, emphasize)
-	estTextTok := int(float64(len(chunk)) / charsPerToken)
-	b := img.Bounds()
-	estImgTok := b.Dx() * b.Dy() / pxPerToken
+
+	imgs := make([]*image.RGBA, len(chunks))
+	estImgTok := 0
+	for i, c := range chunks {
+		imgs[i] = render(c, emphasize)
+		b := imgs[i].Bounds()
+		estImgTok += b.Dx() * b.Dy() / pxPerToken
+	}
+	estTextTok := int(float64(len(combined)) / charsPerToken)
 
 	// Bail to plain text when imaging can't win (sparse content, or below
 	// the measured break-even size inside Claude Code).
 	if float64(estImgTok) > float64(estTextTok)/minRatio ||
 		estTextTok < minTextTokens {
+		reason := "too_small"
+		if estTextTok >= minTextTokens {
+			reason = "sparse"
+		}
 		logCall(map[string]any{"file": p, "page": page, "bailed": true,
-			"est_text_tokens": estTextTok, "est_image_tokens": estImgTok})
+			"reason": reason, "est_text_tokens": estTextTok,
+			"est_image_tokens": estImgTok})
 		return textResult(fmt.Sprintf(
 				"microfiche: %s is below the size/compression threshold where "+
 					"imaging pays off (~%d text vs ~%d image tokens); returning "+
-					"plain text.\n\n%s", p, estTextTok, estImgTok, chunk)),
+					"plain text.\n\n%s", p, estTextTok, estImgTok, combined)),
 			nil, nil
 	}
 
-	var buf strings.Builder
+	pngs := make([][]byte, len(imgs))
 	enc := png.Encoder{CompressionLevel: png.DefaultCompression}
-	var pngBuf bytes.Buffer
-	if err := enc.Encode(&pngBuf, img); err != nil {
-		return textResult(fmt.Sprintf("microfiche: render failed: %v", err)),
-			nil, nil
+	for i, img := range imgs {
+		var pngBuf bytes.Buffer
+		if err := enc.Encode(&pngBuf, img); err != nil {
+			return textResult(
+				fmt.Sprintf("microfiche: render failed: %v", err)), nil, nil
+		}
+		pngs[i] = pngBuf.Bytes()
 	}
-	logCall(map[string]any{"file": p, "page": page, "pages": nPages,
-		"chars": len(chunk), "est_text_tokens": estTextTok,
-		"est_image_tokens": estImgTok,
+	logCall(map[string]any{"file": p, "page": page, "last_page": last,
+		"pages": nPages, "chars": len(combined), "pdf": pdfMode,
+		"est_text_tokens": estTextTok, "est_image_tokens": estImgTok,
 		"est_saved_tokens": estTextTok - estImgTok})
 
+	var buf strings.Builder
+	carrier := "the attached image"
+	if len(chunks) > 1 {
+		carrier = fmt.Sprintf("the %d attached images (in order)",
+			len(chunks))
+	}
+	if pdfMode {
+		carrier = "the attached PDF"
+	}
 	fmt.Fprintf(&buf,
-		"microfiche: %s (page %d/%d, %d chars, ~%d text-tokens delivered "+
-			"as ~%d image-tokens). The full content is in the attached "+
-			"image.\nVerbatim factsheet (exact strings detected in this "+
-			"page):\n%s\nRead the image in a single pass — do NOT crop, "+
-			"zoom, magnify, re-render, or inspect it with Bash/other "+
-			"tools; that costs more than it saves. If any part is not "+
-			"legible enough to answer confidently, or you need a "+
-			"byte-exact value not in the factsheet, use the Read tool on "+
-			"the original file instead.",
-		p, page, nPages, len(chunk), estTextTok, estImgTok,
-		formatFactsheet(exact))
+		"microfiche: %s (pages %d-%d of %d, %d chars, ~%d text-tokens "+
+			"delivered as ~%d image-tokens). The full content is in %s.\n"+
+			"Verbatim factsheet (exact strings detected):\n%s\n"+
+			"Read it in a single pass — do NOT crop, zoom, magnify, "+
+			"re-render, or inspect it with Bash/other tools; that costs "+
+			"more than it saves. If any part is not legible enough to "+
+			"answer confidently, or you need a byte-exact value not in "+
+			"the factsheet, use the Read tool on the original file "+
+			"instead.",
+		p+slice, page, last, nPages, len(combined), estTextTok, estImgTok,
+		carrier, formatFactsheet(exact))
+	if last < nPages {
+		fmt.Fprintf(&buf, "\nFile continues: call microfiche again with "+
+			"page=%d for the next part.", last+1)
+	}
 	if opusProfile {
 		buf.WriteString("\nIMPORTANT: never transcribe codes, " +
 			"identifiers, or numbers from the image itself — take them " +
@@ -411,10 +486,28 @@ func microfiche(ctx context.Context, req *mcp.CallToolRequest,
 			"file. Values read from the image may be misread.")
 	}
 
-	result := &mcp.CallToolResult{Content: []mcp.Content{
-		&mcp.TextContent{Text: buf.String()},
-		&mcp.ImageContent{Data: pngBuf.Bytes(), MIMEType: "image/png"},
-	}}
+	content := []mcp.Content{&mcp.TextContent{Text: buf.String()}}
+	if pdfMode {
+		pdfBytes, err := buildPDF(imgs, pngs)
+		if err != nil {
+			return textResult(
+				fmt.Sprintf("microfiche: pdf failed: %v", err)), nil, nil
+		}
+		content = append(content, &mcp.EmbeddedResource{
+			Resource: &mcp.ResourceContents{
+				URI:      "microfiche://" + p,
+				MIMEType: "application/pdf",
+				Blob:     pdfBytes,
+			},
+		})
+	} else {
+		for _, pg := range pngs {
+			content = append(content,
+				&mcp.ImageContent{Data: pg, MIMEType: "image/png"})
+		}
+	}
+
+	result := &mcp.CallToolResult{Content: content}
 	cacheMu.Lock()
 	renderCache[key] = result
 	cacheMu.Unlock()
@@ -431,7 +524,9 @@ const toolDescription = `Read a LARGE read-only file cheaply by returning ` +
 	`file (identifiers to reuse in code, hashes, config values) — use ` +
 	`the regular Read tool for those. A factsheet of exact-looking ` +
 	`values is included as text; anything not in it that must be ` +
-	`byte-exact should be re-read with Read.`
+	`byte-exact should be re-read with Read. For very large files, ` +
+	`locate the region with Grep first, then pass line_start/line_end ` +
+	`to read just that slice.`
 
 func main() {
 	renderFlag := flag.String("render", "",
@@ -444,6 +539,17 @@ func main() {
 		"In 2-3 sentences, what is this file about?", "question for -bench")
 	profile := flag.String("profile", "fable",
 		"vision profile: fable (dense, ~2.8x) | opus (conservative, ~2x)")
+	flag.IntVar(&maxPages, "pages", 4,
+		"max pages returned per call (multi-image response)")
+	flag.IntVar(&pageChars, "pagechars", 95_000, "characters per page")
+	flag.BoolVar(&pdfMode, "pdf", false,
+		"return pages as a single no-text-layer PDF instead of images")
+	flag.IntVar(&tokenBudget, "budget", 25_000,
+		"max estimated image tokens returned per call")
+	flag.IntVar(&maxFileChars, "maxfile", 200_000,
+		"refuse to ingest files above this many characters (grep+slice instead)")
+	statsFlag := flag.Bool("stats", false,
+		"print savings statistics from ~/.microfiche/log.jsonl and exit")
 	flag.Parse()
 	if *profile == "opus" {
 		fontSize = 10
@@ -453,6 +559,11 @@ func main() {
 	loadFont()
 	if fontError != nil {
 		log.Fatal(fontError)
+	}
+
+	if *statsFlag {
+		printStats()
+		return
 	}
 
 	if *benchFlag != "" {
@@ -466,8 +577,8 @@ func main() {
 			log.Fatal(err)
 		}
 		chunk := string(data)
-		if len(chunk) > maxCharsPerPage {
-			chunk = chunk[:maxCharsPerPage]
+		if len(chunk) > pageChars {
+			chunk = chunk[:pageChars]
 		}
 		exact := extractExactTokens(chunk)
 		emph := make([]string, len(exact))
@@ -497,4 +608,26 @@ func main() {
 		&mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// buildPDF assembles rendered page images into a single no-text-layer PDF
+// (pages carry only the raster, so models bill them as images, not
+// image+text like ordinary PDFs).
+func buildPDF(imgs []*image.RGBA, pngs [][]byte) ([]byte, error) {
+	pdf := fpdf.NewCustom(&fpdf.InitType{UnitStr: "pt"})
+	for i, img := range imgs {
+		b := img.Bounds()
+		w, h := float64(b.Dx()), float64(b.Dy())
+		name := fmt.Sprintf("page%d", i)
+		pdf.RegisterImageOptionsReader(name,
+			fpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(pngs[i]))
+		pdf.AddPageFormat("P", fpdf.SizeType{Wd: w, Ht: h})
+		pdf.ImageOptions(name, 0, 0, w, h, false,
+			fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+	}
+	var out bytes.Buffer
+	if err := pdf.Output(&out); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }

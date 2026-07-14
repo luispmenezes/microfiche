@@ -33,15 +33,14 @@ tokens than the same characters as text tokens.
 
 ## Benchmarks
 
-Measured through real headless Claude Code (`claude -p`), baseline `Read`
-vs microfiche, same file and question, answers verified equivalent:
+Measured through headless Claude Code (`claude -p`), baseline `Read` vs
+microfiche, same file and question, answers verified equivalent:
 
 | model / profile | file | input tokens | net cost | wall time |
 |---|---|---|---|---|
-| Fable 5 / fable | 58 KB doc | −62% | **−53%** | +12% |
-| Fable 5 / fable | 58 KB doc (earlier run) | −57% | −37% | +52% |
+| Fable 5 / fable | 58 KB doc | −57 to −62% | **−37 to −53%** | +12 to +52% |
 | Opus 4.6 / opus | 58 KB doc | −37% | **−29%** | ±0% |
-| any / any | ~18 KB doc | ~flat | **+10–60% (loses)** | +50–175% |
+| any / any | ~18 KB doc | ~flat | +10 to +60% (loses) | +50 to 175% |
 
 Small files lose: prompt caching already makes cached re-reads nearly
 free, and the extra tool round-trip plus image reasoning cost more than

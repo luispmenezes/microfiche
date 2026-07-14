@@ -66,29 +66,19 @@ Grab a prebuilt binary from
 go install github.com/luispmenezes/microfiche@latest
 ```
 
-Then register it with Claude Code (single static binary, no runtime deps;
-needs a monospace system font — Menlo/Monaco on macOS, DejaVu Sans Mono
-on Linux, Consolas on Windows):
+Single static binary, no runtime deps; needs a monospace system font
+(Menlo/Monaco on macOS, DejaVu Sans Mono on Linux, Consolas on Windows).
+
+### Claude Code
 
 ```sh
-claude mcp add microfiche -- /path/to/microfiche                 # Fable 5
-claude mcp add microfiche -- /path/to/microfiche -profile opus   # Opus 4.x
+claude mcp add --scope user microfiche -- /path/to/microfiche                 # Fable 5
+claude mcp add --scope user microfiche -- /path/to/microfiche -profile opus  # Opus 4.x
 ```
 
-Add `--scope user` to make it available in every project. To preview
-what the model sees: `./microfiche -render some_file.txt > preview.png`.
+### Codex CLI
 
-**Optional — raise the trigger rate.** The tool description usually
-suffices, but a hint in your `CLAUDE.md` / `AGENTS.md` makes the model
-reach for it consistently:
-
-```markdown
-For reference files over ~20KB that you will NOT edit (logs, docs,
-transcripts, data dumps), use the microfiche tool instead of Read.
-Keep using Read for anything you will edit or need byte-exact.
-```
-
-**Codex CLI** (or any MCP client) — add to `~/.codex/config.toml`:
+Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.microfiche]
@@ -96,9 +86,38 @@ command = "/path/to/microfiche"
 args = ["-profile", "opus"]
 ```
 
-Caveat: density profiles and the pixels-per-token math are calibrated
-for Claude models; on GPT-family models treat it as experimental and
-run `-bench` first.
+### Cursor
+
+Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` per project):
+
+```json
+{
+  "mcpServers": {
+    "microfiche": {
+      "command": "/path/to/microfiche",
+      "args": ["-profile", "opus"]
+    }
+  }
+}
+```
+
+Pick the profile for the model you run: `fable` for Claude Fable 5,
+`opus` for Claude Opus 4.x. On non-Claude models (GPT, Gemini) the
+density calibration and token math are untested — start with `-profile
+opus` and run `-bench` before trusting it.
+
+**Optional — raise the trigger rate.** A hint in your `CLAUDE.md` /
+`AGENTS.md` / Cursor rules makes the model reach for the tool
+consistently:
+
+```markdown
+For reference files over ~20KB that you will NOT edit (logs, docs,
+transcripts, data dumps), use the microfiche tool instead of Read.
+Keep using Read for anything you will edit or need byte-exact.
+```
+
+To preview what the model sees:
+`./microfiche -render some_file.txt > preview.png`.
 
 ## When to use it
 

@@ -75,8 +75,30 @@ claude mcp add microfiche -- /path/to/microfiche                 # Fable 5
 claude mcp add microfiche -- /path/to/microfiche -profile opus   # Opus 4.x
 ```
 
-That's it — Claude Code picks the tool up automatically. To preview what
-the model sees: `./microfiche -render some_file.txt > preview.png`.
+Add `--scope user` to make it available in every project. To preview
+what the model sees: `./microfiche -render some_file.txt > preview.png`.
+
+**Optional — raise the trigger rate.** The tool description usually
+suffices, but a hint in your `CLAUDE.md` / `AGENTS.md` makes the model
+reach for it consistently:
+
+```markdown
+For reference files over ~20KB that you will NOT edit (logs, docs,
+transcripts, data dumps), use the microfiche tool instead of Read.
+Keep using Read for anything you will edit or need byte-exact.
+```
+
+**Codex CLI** (or any MCP client) — add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.microfiche]
+command = "/path/to/microfiche"
+args = ["-profile", "opus"]
+```
+
+Caveat: density profiles and the pixels-per-token math are calibrated
+for Claude models; on GPT-family models treat it as experimental and
+run `-bench` first.
 
 ## When to use it
 

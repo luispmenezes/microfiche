@@ -147,6 +147,41 @@ Keep using Read for anything you will edit or need byte-exact.
 To preview what the model sees:
 `./microfiche -render some_file.txt > preview.png`.
 
+## Enforcing usage (Claude Code hook)
+
+A CLAUDE.md hint raises usage; a `PreToolUse` hook guarantees it.
+[`hooks/read-redirect-microfiche.sh`](hooks/read-redirect-microfiche.sh)
+denies full-file `Read`s of large text files and redirects the model to
+microfiche. Copy it to `~/.claude/hooks/` and wire it up in
+`~/.claude/settings.json`:
+
+```json
+"hooks": {
+  "PreToolUse": [{
+    "matcher": "Read",
+    "hooks": [{ "type": "command",
+                "command": "~/.claude/hooks/read-redirect-microfiche.sh",
+                "timeout": 10 }]
+  }]
+}
+```
+
+Design notes baked into the script — keep them if you modify it:
+
+- **Ranged reads always pass** (`offset`/`limit`/`pages`) — that's the
+  sanctioned path for byte-exact strings and for edit flows.
+- **Exactness-heavy data formats always pass** (`.json`, `.csv`,
+  lockfiles, minified bundles...) — they're all exact values, the worst
+  content to read from pixels; the factsheet can't cover them.
+- **Two thresholds, not one**: below 50KB text is cheap (prompt cache),
+  so Read passes; above 200KB the hook teaches Grep + ranged reads
+  instead of microfiche, because full-file ingestion of *any* kind loses
+  there.
+- **The hook is model-blind but the density profile isn't**: it assumes
+  the registered server's profile matches your model. If you switch to
+  an Opus-tier model, re-register with `-profile opus` — dense renders
+  on Opus silently degrade exact recall.
+
 ## When to use it
 
 Doc-, log-, and transcript-heavy work over files in the 20–60 KB sweet
